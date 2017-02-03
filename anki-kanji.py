@@ -2,7 +2,7 @@
 import sys
 import argparse
 import os
-import os.path as path
+import os.path
 import shutil
 import anki
 import anki.importing
@@ -16,7 +16,7 @@ import traceback
 from operator import itemgetter
 
 # constants
-DEFAULT_ANKI_DIR = path.join('Documents', 'Anki')
+DEFAULT_ANKI_DIR = os.path.join('Documents', 'Anki')
 DEFAULT_ANKI_PROFILE = 'Teste'
 DEFAULT_ANKI_COL = 'collection.anki2'
 KD_FILE = 'Official_KanjiDamage_deck_REORDERED.apkg'
@@ -50,7 +50,7 @@ opt_parser.add_argument('-d', '--force-download', action='store_true', help='for
 options = opt_parser.parse_args()
 if not options.file:
     options.profile = options.profile or DEFAULT_ANKI_PROFILE
-    options.file = path.expanduser(path.join('~', DEFAULT_ANKI_DIR, options.profile, DEFAULT_ANKI_COL))
+    options.file = os.path.expanduser(os.path.join('~', DEFAULT_ANKI_DIR, options.profile, DEFAULT_ANKI_COL))
 
 
 
@@ -140,17 +140,19 @@ def kd_get_kanji(doc):
     if kanji is not None:
         return kanji
     else:
-        return str(next(iter(doc.xpath('//div[@class="span8"]/h1/span[@class="kanji_character"]/text()'))))
+        return str(next(iter(doc.xpath('//div[@class="span8"]/h1/span[@class="kanji_character"]/text()')))).strip()
 
 
 # tries to extract the kd kanji meaning, otherwise raises
 def kd_get_meaning(doc):
-    return str(next(iter(doc.xpath('//div[@class="span8"]/h1/span[@class="translation"]/text()'))))
+    return str(next(iter(doc.xpath('//div[@class="span8"]/h1/span[@class="translation"]/text()')))).strip()
 
 
 # tries to extract the kd kanji description, otherwise returns the empty string
 def kd_get_usefulness(doc):
-    return str(next(iter(doc.xpath('//div[@class="span4 text-righted"]/span[@class="usefulness-stars"]/text()')), ''))
+    return str(
+        next(iter(doc.xpath('//div[@class="span4 text-righted"]/span[@class="usefulness-stars"]/text()')), '')
+    ).strip()
 
 
 # tries to extract the kd kanji description, otherwise returns the empty string
@@ -286,17 +288,45 @@ def tg_get_stroke_order(doc):
     return None
 
 
-def kd_update(col, kanjis_by_text, kd_model):
+def kd_load_template_file(prefix, tmpl_name, side, default=''):
+    path = '_'.join([prefix, tmpl_name, side]).lower() + '.html'
+    try:
+        with codecs.open(path, 'r', 'utf-8') as f:
+            if not options.quiet:
+                print('updating template from: ' + path)
+            default = f.read()
+    except:
+        pass
+    return default
+
+
+def kd_update_templates(col, kd_model):
+    for tmpl in kd_model['tmpls']:
+        for key, side in [('q', 'front'), ('a', 'back')]:
+            field = key + 'fmt'
+            tmpl[field] = kd_load_template_file('kd', tmpl['name'], side, tmpl[field])
+            tmpl['b' + field] = tmpl[field]
+
+    # adds used tangorin css classes
     if not [l for l in kd_model['css'].splitlines() if l.strip().startswith('.k-sod')]:
         kd_model['css'] += '\n.k-sod {\n' \
                            '  line-height: 0;\n' \
                            '  padding: 4px 0;\n' \
                            '  margin: 5px 0;\n' \
                            '  zoom: 1.5;\n}'
-        col.models.save(kd_model)
+    col.models.save(kd_model)
+
+
+def kd_update(col, kanjis_by_text, kd_model, kd_deck):
+    kd_model['did'] = kd_deck['id']
+
+    kd_update_templates(col, kd_model)
 
     # processes data from kd website
+    if not options.quiet:
+        print('loading data from kanji damage website (this will take quite a while)...')
     col.models.setCurrent(kd_model)
+    col.decks.select(kd_deck['id'])
     url = KD_DAMAGE_BASE_URL + KD_KANJI_PATH + '/1'
     kanji_re = re.compile(KANJI_REGEX)
     while url:
@@ -354,12 +384,13 @@ def kd_update(col, kanjis_by_text, kd_model):
                 note['Full header'] = kd_get_header(col, doc, KD_DAMAGE_BASE_URL)
                 note['Full lookalikes'] = kd_get_lookalikes(col, doc, KD_DAMAGE_BASE_URL)
                 # stroke order from tangorin
-                if kanji_re.match(kanji):
-                    r = requests.get(TG_BASE_URL + TG_KANJI_PATH + '/' + kanji)
-                    stroke_order = tg_get_stroke_order(lxml.html.fromstring(r.content)) \
-                        if (r.status_code == 200) else None
-                    if stroke_order is not None:
-                        note['Stroke order'] = stroke_order
+                # if kanji_re.match(kanji):
+                #     r = requests.get(TG_BASE_URL + TG_KANJI_PATH + '/' + kanji)
+                #     stroke_order = tg_get_stroke_order(lxml.html.fromstring(r.content)) \
+                #         if (r.status_code == 200) else None
+                #     if stroke_order is not None:
+                #         note['Stroke order'] = stroke_order
+
                 if key not in kanjis_by_text:
                     col.addNote(note)
                     kanjis_by_text[key] = note
@@ -373,8 +404,6 @@ def kd_update(col, kanjis_by_text, kd_model):
 
             # finds the link to the next kanji
             url = next(iter(doc.xpath('//div[@class="span2 text-righted"]/a[1]/@href')), None)
-            if meaning == 'key':
-                url = None
         except:
             traceback.print_exc()
             url = None
@@ -515,11 +544,14 @@ def main():
 
     # updates kanji damage deck
     if options.update_kd:
+        if not options.quiet:
+            print('updating ' + kd_model['name'] + '...')
         # removes media files
         if options.force_download:
-            shutil.rmtree(path.join(col.media.dir(), 'assets'), ignore_errors=True)
-            shutil.rmtree(path.join(col.media.dir(), 'visualaids'), ignore_errors=True)
-        kd_update(col, kanjis_by_text, kd_model)
+            shutil.rmtree(os.path.join(col.media.dir(), 'assets'), ignore_errors=True)
+            shutil.rmtree(os.path.join(col.media.dir(), 'visualaids'), ignore_errors=True)
+        kd_update(col, kanjis_by_text, kd_model, kd_deck)
+    exit()
 
     # word frequency handling
     word_freq = load_word_freq('word-freq.txt')  # {word : frequency}
@@ -550,10 +582,10 @@ def main():
         for reading, examples in words.items():
             example = next(iter(sorted(examples, key=itemgetter('order'), reverse=True)), None)
             if example:
-                card = col.newNote()
-                card['Front'] = u'<h3>' + example['word'] + '</h3>'
-                card['Back'] = u'<h3>' + example['furigana'] + '</h3><br>' + example['meaning']
-                col.addNote(card)
+                note = anki.notes.Note(col, kd_model)
+                note['Front'] = u'<h3>' + example['word'] + '</h3>'
+                note['Back'] = u'<h3>' + example['furigana'] + '</h3><br>' + example['meaning']
+                col.addNote(note)
     col.save()
     col.close()
     if not options.quiet:
