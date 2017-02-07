@@ -1,3 +1,6 @@
 .idea
 anki
 *.apkg
+__pycache__
+*.json
+*.csv

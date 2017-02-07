@@ -1,0 +1,166 @@
+@font-face {
+  font-family: myfont;
+  src: url('_NotoSansJP-Medium.otf');
+}
+
+/* generic styles */
+p {
+  margin: 0 0 5px 0;
+  line-height: 1.2em;
+}
+table {
+  margin-bottom: 5px;
+}
+a {
+  color: #08c;
+  text-decoration: none;
+}
+h1 {
+  margin-bottom: 0;
+}
+
+/* containers */
+body {
+  font-size: 120%;
+}
+
+.mobile body {
+  font-size: 100%;
+}
+
+#qa_box {
+  font-size: 80%; /* Ankiweb*/
+}
+
+.card {
+  margin: 0;
+  padding: 0;
+}
+
+.cardcontainer {
+  text-align: center;
+  color: black;
+  position: relative;
+  margin: 5px;
+  font-family: myfont, sans-serif;
+}
+
+.question {
+  font-size: 50px;
+}
+
+.kanji_character.question {
+  font-size: 100px;
+}
+
+.questionhelp {
+  font-size: 25px;
+}
+
+/* tables */
+table.definition td {
+  vertical-align: top;
+  text-align: left;
+}
+
+table.definition td:first-child {
+  padding-right: 20px;
+  white-space: nowrap;
+  text-align: right;
+  min-width: 100px;
+}
+.mobile table.definition td:first-child {
+  padding-right: 10px;
+  white-space: nowrap;
+  text-align: right;
+  min-width: 50px;
+}
+
+.table {
+  width: 100%;
+}
+
+.table th, .table td {
+  padding: 5px;
+  line-height: 22px;
+  text-align: left;
+  vertical-align: top;
+  border-top: 1px solid #ddd;
+}
+
+/* color coding */
+.particles {
+  color: #06c;
+}
+.translation {
+  color: #46a546;
+}
+.onyomi {
+  color: #f89406;
+}
+.component {
+  color: #9d261d;
+}
+
+/* tags */
+.label {
+  margin-top: -4px;
+  margin-right: 2px;
+  display: inline-block;
+  padding: 0px 4px 2px;
+  text-shadow: none;
+}
+.label, .badge {
+  display: inline-block;
+  padding: 2px 4px;
+  font-size: 90%;
+  font-weight: bold;
+  line-height: 14px;
+  color: #fff;
+  vertical-align: baseline;
+  white-space: nowrap;
+  text-shadow: 0 -1px 0 rgba(0,0,0,0.25);
+  background-color: #999;
+  margin: 1px;
+  border-radius: 3px;
+}
+.label-info[href], .badge-info[href] {
+  background-color: #2d6987;
+}
+
+/* header */
+.span4 {
+  width: 300px;
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+.text-righted {
+  text-align: right;
+  max-width: 30%;
+}
+.header .kanji_character {
+  font-size: 300%;
+  display: block;
+  font-weight: normal;
+}
+.usefulness-stars {
+  color: #ffc40d;
+}
+.cardcontainer .header .span8 {
+  /* Cancel some default styles on Ankiweb */
+  width: auto;
+  float: none;
+}
+
+/* "used in" */
+ul.lacidar {
+  margin: 0;
+  list-style: none;
+  padding: 0;
+  display: inline;
+}
+
+ul.lacidar li {
+  display: inline;
+}
