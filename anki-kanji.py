@@ -3,17 +3,22 @@ import sys
 import argparse
 import os
 import os.path
+from operator import itemgetter
 import shutil
 import logging
 import codecs
-import re
+import copy
+import json
 import anki
 import util
 from kanjidamage import KanjiDamage
 from tangorin import Tangorin as tg
+from anki.exporting import AnkiPackageExporter
+
 
 # constants
 DEFAULT_KD_FILE = 'Official_KanjiDamage_deck_REORDERED.apkg'
+DEFAULT_OUT_FILE = 'KanjiDamageWords.apkg'
 DEFAULT_ANKI_DIR = os.path.join('Documents', 'Anki')
 DEFAULT_ANKI_PROFILE = 'Teste'
 DEFAULT_ANKI_COL = 'collection.anki2'
@@ -27,6 +32,7 @@ opt_parser = argparse.ArgumentParser(description='Generates Anki collections bas
 opt_group_path = opt_parser.add_mutually_exclusive_group();
 opt_group_path.add_argument('-f', '--file', help='path to collection file (overwrites -p)', metavar="COLLECTION")
 opt_group_path.add_argument('-p', '--profile', help='the Anki profile to be used (will use default Anki path)')
+opt_parser.add_argument('-o', '--output', default=DEFAULT_OUT_FILE, help='KanjiDamage Words output file', metavar="PATH")
 opt_group_verb = opt_parser.add_mutually_exclusive_group();
 opt_group_verb.add_argument('-v', '--verbose', action='store_true', help='show detailed messages')
 opt_group_verb.add_argument('-q', '--quiet', action='store_true', help='show no message')
@@ -98,7 +104,7 @@ def kdw_reset_model_and_deck(col):
     col.models.addTemplate(model, tmpl_read)
 
     tmpl_meaning = col.models.newTemplate('Meaning')
-    tmpl_meaning['qfmt'] = util.load_template_file('kdw', 'read', 'front', log) or ''
+    tmpl_meaning['qfmt'] = util.load_template_file('kdw', 'meaning', 'front', log) or ''
     tmpl_meaning['afmt'] = util.load_template_file('kdw', 'meaning', 'back', log) or ''
     tmpl_meaning['bqfmt'] = tmpl_meaning['qfmt']
     tmpl_meaning['bafmt'] = tmpl_meaning['afmt']
@@ -108,54 +114,128 @@ def kdw_reset_model_and_deck(col):
     return model, col.decks.get(deck_id)
 
 
+# mergest the word databases created from kd and tangorin
+# the result will be a list of tuples (kanji, [word entries])
+# each word entry will be {
+#      'word': <in kanji>,
+#      'prefix': <prefix like wo or ga or empty>,
+#      'suffix': <suffix, like 'xxxx', de, ni or empty>,
+#      'furigana': <reading>,
+#      'meaning': <meaning>,
+#      'sort': <precedence of this word for this kanji, float, always present>,
+#      'sort2': <second level of precedence of this word for this kanji (sort is the same), float, may be absent>,
+# }
+def kdw_merge_kd_tg(kanjis_ordered, kd_kanji_to_words, tg_kanji_to_words, word_freq):
+    result = []
+
+    # makes a deep copy of a word entry from either database
+    def copy_entry(e):
+        new_e = copy.deepcopy(e)
+        new_e['prefix'] = e.get('prefix', '')
+        new_e['suffix'] = e.get('suffix', '')
+        return new_e
+
+    # checks if a tangorin entry's word matches the word in a kanji damage entry
+    # if it's the special case of 'お' prefix, updates the kanji_damage word
+    def word_match(kde, tge):
+        if kde['word'] == tge['word']:
+            return True
+        if kde['prefix'] == 'お':
+            honorific = 'お' + kde['word']
+            if honorific == tge:
+                kde['prefix'] = ''
+                kde['word'] = honorific
+                return True
+        return False
+
+    for kanji in kanjis_ordered:
+        entries = []
+
+        # add all kd entries using negative numbers for the sorting order
+        kd_entries = kd_kanji_to_words[kanji]
+        sort1 = -len(kd_entries)
+        while sort1 < 0:
+            entry = copy_entry(kd_entries[sort1])
+            entry['sort'] = sort1
+            entries.append(entry)
+            sort1 += 1
+
+        # now adds tangorin words
+        for reading, tg_entries in tg_kanji_to_words[kanji].items():
+            sort2 = 2
+            for tg_entry in tg_entries:
+                entry = next((e for e in entries if word_match(e, tg_entry)), None)
+                if entry:  # repeated?
+                    if 'sort2' not in entry:
+                        entry['meaning'] = '<p>' + tg_entry['meaning'] + '</p>' + entry['meaning']
+                        entry['sort2'] = sort2
+                else:
+                    entry = copy_entry(tg_entry)
+                    entry['sort'] = sort1
+                    entry['sort2'] = (1 - word_freq[entry['word']]) if entry['word'] in word_freq else sort2
+                    entries.append(entry)
+                sort2 += 1
+            sort1 += 1
+        result.append((kanji, entries))
+
+    return result
+
+
 # removes the previous 'kanji damage words' deck if it exists and creates
 # a new one
 def kdw_create(col, kd):
     # word frequency handling
     word_freq = load_word_freq('word-freq.txt')  # {word : frequency in [0,1]}
-    kanjis = kd.get_kanjis()  # [kanji characters, ordered by due date]
-    tg_kanji_to_words = tg.get_kanji_to_words(TG_FILE, kanjis, log)  # {kanji : {reading : [words sorted by appearance]}}
     kd_kanji_to_words = kd.get_kanji_to_words()
-    print(kd_kanji_to_words)
-    nj_re = re.compile(util.NON_JAPANESE_REGEX_STR)
-    nj_chars = {}
-    for words in kd_kanji_to_words.values():
-        for word in words:
-            for c in nj_re.findall(word['word']):
-                nj_chars[c] = nj_chars.get(c, 0) + 1
-    print(nj_chars)
+    kanjis_ordered = kd.get_kanjis_ordered()  # [kanji characters, ordered by due date]
+    tg_kanji_to_words = tg.get_kanji_to_words(TG_FILE, kanjis_ordered, log)  # {kanji : {reading : [words sorted by appearance]}}
+    kanji_words = kdw_merge_kd_tg(kanjis_ordered, kd_kanji_to_words, tg_kanji_to_words, word_freq)
 
-    word_to_kanjis = {}  # {word : [kanjis used in order of due date]}
+    final_entries = []
+    take_n = 1
+    for (kanji, words) in kanji_words:
+        # all required words have negative 'sort' values
+        main_words = sorted([w for w in words if w['sort'] < 0], key=itemgetter('sort'))
+        # now takes the ones with higher precedence from the other words
+        sort1_keys = set(map(lambda x: x['sort'], words))
+        word_groups = [
+            sorted([word for word in words if word['sort'] == key], key=itemgetter('sort2'))
+            for key in sort1_keys if key >= 0
+        ]
+        # puts all of them together
+        final_entries += main_words
+        for group in word_groups:
+            final_entries += [group[i] for i in range(0, take_n) if i < len(group)]  # take up to take_n first words
+
+    with codecs.open('entries.json', 'wb', encoding='utf-8') as f:
+        json.dump(final_entries, f, ensure_ascii=False, indent=4, sort_keys=True)
 
     log.info("creating '%s' deck", KDW_DECK)
     kdw_model, kdw_deck = kdw_reset_model_and_deck(col)
     col.models.setCurrent(kdw_model)
     col.decks.select(kdw_deck['id'])
     col.conf['nextPos'] = 1
-    exit()
 
-    # loads the examples from tangorin
-    n = 0
-    max = float('inf')
-    for key in kanjis:
-        n += 1
-        if (n > max):
-            break
-        log.debug('[%d/%d] %s', n, len(kanjis), key)
-        words = tg_get_words_for_kanji(key)
-        if not words:
+    def create_affix_tag(affix):
+        return '(<span class="particles">' + affix + '</span>)' if affix else ''
+
+    log.info('%d word candidates will be processed', len(final_entries))
+    notes = {}
+    for entry in final_entries:
+        if entry['word'] in notes:
             continue
-        for reading, examples in words.items():
-            example = next(iter(sorted(examples, key=itemgetter('order'), reverse=True)), None)
-            if example:
-                note = anki.notes.Note(col, kd.get_model())
-                note['Front'] = u'<h3>' + example['word'] + '</h3>'
-                note['Back'] = u'<h3>' + example['furigana'] + '</h3><br>' + example['meaning']
-                col.addNote(note)
+        note = col.newNote()
+        prefix = create_affix_tag(entry['prefix'])
+        suffix = create_affix_tag(entry['suffix'])
+        note['Kanji'] = prefix + entry['word'] + suffix
+        note['Furigana'] = prefix + entry['furigana'] + suffix
+        note['Meaning'] = entry['meaning']
+        note['Examples'] = ''
+        col.addNote(note)
+        notes[entry['word']] = note
     col.save()
-    col.close()
-    log.info('hit rate: ' + str(hit_count) + '/' + str(len(seen_words)))
-    log.info(str(len(word_freq)))
+    log.info('%d notes were created', len(notes))
+    return kdw_model, kdw_deck
 
 
 ##########################################
@@ -166,6 +246,7 @@ def main():
     log.info('open collection: %s', options.file)
     cwd = os.getcwd()
     col = anki.Collection(path=options.file)
+    work_dir = os.getcwd()
     os.chdir(cwd)
 
     kd = KanjiDamage(col, log)
@@ -201,7 +282,20 @@ def main():
         kd.update()
 
     # recreates the kanji damage words deck
-    kdw_create(col, kd)
+    _, kdw_deck = kdw_create(col, kd)
+
+    log.info('writing output file %s...', options.output)
+    exporter = AnkiPackageExporter(col)
+    exporter.includeSched = False
+    exporter.includeMedia = True
+    exporter.includeTags = True
+    exporter.did = kdw_deck['id']
+
+    out_path = os.path.join(os.getcwd(), options.output)
+    os.chdir(work_dir)
+    exporter.exportInto(out_path)
+    log.info('all is well!')
+    col.close()
 
 
 if __name__ == '__main__':

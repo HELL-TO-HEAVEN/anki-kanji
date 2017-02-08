@@ -49,10 +49,6 @@ body {
   font-size: 50px;
 }
 
-.kanji_character.question {
-  font-size: 100px;
-}
-
 .questionhelp {
   font-size: 25px;
 }
@@ -139,14 +135,11 @@ table.definition td:first-child {
   text-align: right;
   max-width: 30%;
 }
-.header .kanji_character {
-  font-size: 300%;
-  display: block;
-  font-weight: normal;
-}
+
 .usefulness-stars {
   color: #ffc40d;
 }
+
 .cardcontainer .header .span8 {
   /* Cancel some default styles on Ankiweb */
   width: auto;
@@ -163,4 +156,9 @@ ul.lacidar {
 
 ul.lacidar li {
   display: inline;
+}
+
+.ruby {
+    ruby-position: over;
+    ruby-align: center;
 }

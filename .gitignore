@@ -1,6 +1,7 @@
+__pycache__
 .idea
 anki
 *.apkg
-__pycache__
+!KanjiDamageWords.apkg
 *.json
 *.csv

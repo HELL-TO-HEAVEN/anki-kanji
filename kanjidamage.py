@@ -3,7 +3,7 @@ import os.path
 import requests
 import lxml
 import lxml.html
-import anki.importing
+from anki.importing import AnkiPackageImporter
 import util
 
 
@@ -16,7 +16,6 @@ KD_NUMBER_STRIP_REGEX = re.compile('([a-zA-Z]|\s)+')
 KD_DAMAGE_BASE_URL = 'http://www.kanjidamage.com'
 KD_KANJI_PATH = '/kanji'
 # don't touch these strings!
-KD_KUN_BLANK = re.compile(r'\s+')
 ORD_JAP_BASE = ord('！')
 ORD_JAP_TOP = ord('～')
 ORD_ASCII_BASE = ord('!')
@@ -35,7 +34,7 @@ class KanjiDamage:
         util.remove_model_and_deck(self.col, KD_MODEL, KD_DECK_NAME, self.log)
         util.remove_model_and_deck(self.col, KD_MODEL, KDR_DECK_NAME, self.log)
         self.log.info('importing %s', path)
-        importer = anki.importing.AnkiPackageImporter(self.col, path)
+        importer = AnkiPackageImporter(self.col, path)
         importer.run()
         self.col.save()
 
@@ -50,7 +49,7 @@ class KanjiDamage:
         return self.deck
 
     # gets the kanjis ordered by 'Read' card due date
-    def get_kanjis(self):
+    def get_kanjis_ordered(self):
         kd_model = self.get_model()
         kd_deck = self.get_deck()
         nids = self.col.db.list(
@@ -328,38 +327,82 @@ class KanjiDamage:
 
     # for each valid kanji character in the database, loads the word examples (kunyomi and jukugo)
     # and returns a map {kanji : [words sorted by appearance]}
-    # a word is {'word': <in kanji>, 'furigana': <reading>, 'meaning': <meaning>}
+    # a word is {
+    #      'word': <in kanji>,
+    #      'prefix': <prefix like wo or ga>, (may not be present)
+    #      'suffix': <suffix, like 'xxxx', de, ni>, (may not be present)
+    #      'furigana': <reading>,
+    #      'meaning': <meaning>
+    # }
     def get_kanji_to_words(self):
-        import codecs
-        f = codecs.open('words.csv', 'wb', encoding='utf-8')
         self.log.info('loading words from kanji damage')
         kanji_to_words = {}
         for kanji, note in self.get_notes(expr=util.KANJI_REGEX).items():
-            kanji_to_words[kanji] = self._extract_kuyomis(note, f)
-        f.close()
+            words = self._extract_kuyomis(note)
+            seen_words = [k['word'] for k in words]
+            words += [j for j in self._extract_jukugo(note) if j['word'] not in seen_words]
+            kanji_to_words[kanji] = words
         return kanji_to_words
 
-    def _extract_kuyomis(self, note, f):
+    KD_JK_CLEAN = re.compile(util.NON_JAPANESE_REGEX_STR)
+
+    def _extract_jukugo(self, note):
+        jukugo = note['Full jukugo']
+        words = []
+        if jukugo:
+            table = lxml.html.fromstring(jukugo)
+            for row in table.xpath('//tr'):
+                entry = dict()
+
+                meaning = row.xpath('td[2]/node()')
+                meaning = [util.html_to_string(e) if type(e) is lxml.html.HtmlElement else str(e) for e in meaning]
+                entry['meaning'] = ''.join([self._jap_ascii(text).strip() for text in meaning])
+
+                word = row.xpath('td[1]//ruby[1]/text()')
+                entry['word'] = ''.join([self.KD_JK_CLEAN.sub('', self._jap_ascii(node).lower()) for node in word])
+                entry['furigana'] = next(iter(row.xpath('td[1]//ruby[1]/rt/text()')), '').strip()
+                words.append(entry)
+        return words
+
+    KD_KUN_CLEAN = re.compile('([^xynubior()*' + util.JAPANESE_REGEX_STR[2:])
+    KD_KUN_PREF = re.compile(r'^[(](?P<prefix>[^)]*)[)](?P<root>.*)')
+    KD_KUN_SUFF = re.compile(r'(?P<root>[^(]*)[(](?P<suffix>[^)]*)[)]$')
+
+    def _extract_kuyomis(self, note):
         kun = note['Full kunyomi']
         words = []
         if kun:
             table = lxml.html.fromstring(kun)
             for row in table.xpath('//tr'):
-                meaning = self._letter_sanitize(''.join(row.xpath('td[2]/text()'))).strip()
-                word = ''.join([re.sub(KD_KUN_BLANK, '', self._letter_sanitize(node).lower()) for node in row.xpath('td[1]//text()')])
+                entry = dict()
+
+                meaning = row.xpath('td[2]/node()')
+                meaning = [util.html_to_string(e) if type(e) is lxml.html.HtmlElement else str(e) for e in meaning]
+                entry['meaning'] = ''.join([self._jap_ascii(text).strip() for text in meaning])
+
+                word_it = row.xpath('td[1]//text()')
+                word = ''.join([self.KD_KUN_CLEAN.sub('', self._jap_ascii(node).lower()) for node in word_it])
                 parts = word.split('*')
                 if parts:
-                    prefix, word = self._kunyomi_break_prefix(parts[0])
-                word = '\t'.join(parts)
-
-                f.write('{0}\t{1}\n'.format(word, meaning))
-                words.append({'word': word, 'meaning': meaning})
+                    root, entry['prefix'] = self._kunyomi_get_affix(parts[0], self.KD_KUN_PREF, 'prefix')
+                    parts[0] = root
+                    tail, suffix = self._kunyomi_get_affix(parts[-1], self.KD_KUN_SUFF, 'suffix')
+                    entry['suffix'] = suffix
+                    if (len(parts) == 1) and (not suffix):
+                        tail = ''
+                    entry['furigana'] = root + tail
+                    entry['word'] = note['Kanji'] + tail
+                words.append(entry)
         return words
 
-    def _kunyomi_break_prefix(self, word):
-        return '', word
+    def _kunyomi_get_affix(self, word, expr, group_name):
+        m = expr.match(word)
+        if m:
+            return m.group('root'), m.group(group_name)
+        return word, ''
 
-    def _letter_sanitize(self, word):
+    @staticmethod
+    def _jap_ascii(word):
         chars = []
         for c in word:
             # japanese full width letters to ascii

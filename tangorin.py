@@ -37,7 +37,7 @@ class Tangorin:
 
     # given one kanji, uses tangorin to find example words
     # and returns a map {kanji : {reading : [words sorted by appearance]}}
-    # a word is {'word': <in kanji>, 'furigana': <reading>, 'meaning': <meaning>}
+    # a word is {'word': <in kanji>, 'furigana': <kana>, 'meaning': <meaning>}
     @staticmethod
     def _get_words_for_kanji(kanji, log):
         try:
